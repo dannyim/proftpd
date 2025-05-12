@@ -477,12 +477,17 @@ static int do_ldap_bind(LDAP *conn_ld) {
   sleep_ms(retry_interval_ms);
   tries += 1;
   } 
-  (void) pr_log_writefile(ldap_logfd, MOD_LDAP_VERSION,
-    "successfully bound as DN '%s' with password %s for '%s'",
-    ldap_dn ? ldap_dn : "(anonymous)",
-    ldap_dnpass ? "(see config)" : "(none)", curr_server_info->info_text);
+  if(tries > retry_limit) {
+    (void) pr_log_writefile(ldap_logfd, MOD_LDAP_VERSION, "number of tries exceeded, aborting");
+    return -1;
+  } else {
+    (void) pr_log_writefile(ldap_logfd, MOD_LDAP_VERSION,
+      "successfully bound as DN '%s' with password %s for '%s'",
+      ldap_dn ? ldap_dn : "(anonymous)",
+      ldap_dnpass ? "(see config)" : "(none)", curr_server_info->info_text);
 
-  return 0;
+    return 0;
+  }
 }
 
 static int do_ldap_connect(LDAP **conn_ld, int do_bind) {
@@ -825,11 +830,17 @@ static LDAPMessage *pr_ldap_search(const char *basedn, const char *filter,
   sleep_ms(retry_interval_ms);
   tries += 1;
   }
-
+  if(tries > retry_limit) {
+    (void) pr_log_writefile(ldap_logfd, MOD_LDAP_VERSION,
+      "LDAP connection went away, search failed");
+    pr_ldap_unbind();
+    return NULL;
+  } else {
   (void) pr_log_writefile(ldap_logfd, MOD_LDAP_VERSION,
     "searched under base DN %s using filter %s", basedn,
     filter ? filter : "(null)");
   return result;
+  }
 }
 
 static struct passwd *pr_ldap_user_lookup(pool *p, char *filter_template,
@@ -1953,9 +1964,16 @@ MODRET ldap_auth_check(cmd_rec *cmd) {
     sleep_ms(retry_interval_ms);
     tries += 1;
     }
-    LDAP_UNBIND(ld_auth);
-    session.auth_mech = "mod_ldap.c";
-    return PR_HANDLED(cmd);
+    if(tries > retry_limit) {
+      (void) pr_log_writefile(ldap_logfd, MOD_LDAP_VERSION,
+        "invalid credentials used for %s", ldap_authbind_dn);
+      LDAP_UNBIND(ld_auth);
+      return PR_ERROR(cmd);
+    } else {
+      LDAP_UNBIND(ld_auth);
+      session.auth_mech = "mod_ldap.c";
+      return PR_HANDLED(cmd);
+    }
   }
 
   /* Get the length of "scheme" in the leading {scheme} so we can skip it
